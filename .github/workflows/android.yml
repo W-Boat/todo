@@ -11,8 +11,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-37"
+      - run: sdkmanager --install "platforms;android-37"
       - uses: gradle/actions/setup-gradle@v4
       - run: bash gradlew testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v4
