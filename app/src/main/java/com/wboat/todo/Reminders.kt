@@ -102,16 +102,27 @@ object Reminders {
         }
     }
 
-    fun show(context: Context, task: Task, phase: String) {
+    fun status(context: Context): String {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val notifications = if (manager.areNotificationsEnabled()) "通知已开启" else "通知已关闭"
+        val exactness = if (exact(context)) "精确提醒已开启" else "使用非精确提醒"
+        val muted = listOf("normal" to "待办提醒", "strong" to "强提醒", "vibration" to "震动提醒")
+            .filter { (id, _) -> manager.getNotificationChannel(id)?.importance == NotificationManager.IMPORTANCE_NONE }
+            .joinToString("、") { it.second }
+        return listOf(notifications, exactness, if (muted.isEmpty()) "" else "已关闭渠道 $muted")
+            .filter(String::isNotBlank).joinToString(" · ")
+    }
+
+    fun show(context: Context, task: Task, phase: String): Boolean {
         if (Build.VERSION.SDK_INT >= 33 &&
-            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
         val manager = context.getSystemService(NotificationManager::class.java)
         val channel = if (task.strong) "strong" else if (task.vibration) "vibration" else "normal"
         manager.createNotificationChannel(NotificationChannel(
             channel, when (channel) { "strong" -> "强提醒"; "vibration" -> "震动提醒"; else -> "待办提醒" },
             if (task.strong) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT
         ).apply { enableVibration(task.vibration || task.strong) })
-        if (phase == "early" && deliveredEarly(context, task)) return
+        if (phase == "early" && deliveredEarly(context, task)) return false
         if (phase == "due") {
             manager.cancel(task.id + "early", 0)
             delivery(context).edit().remove(task.id).apply()
@@ -130,12 +141,13 @@ object Reminders {
             notification.setWhen(task.due ?: System.currentTimeMillis())
                 .setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true).setOngoing(true)
         }
+        if (!manager.areNotificationsEnabled() ||
+            manager.getNotificationChannel(channel)?.importance == NotificationManager.IMPORTANCE_NONE) return false
         manager.notify(task.id + phase, 0, notification.build())
-        if (phase == "early" && task.due != null &&
-            manager.areNotificationsEnabled() &&
-            manager.getNotificationChannel(channel).importance != NotificationManager.IMPORTANCE_NONE) {
+        if (phase == "early" && task.due != null) {
             delivery(context).edit().putLong(task.id, task.due).apply()
         }
+        return true
     }
 }
 

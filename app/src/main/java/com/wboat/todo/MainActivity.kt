@@ -38,6 +38,8 @@ import java.time.*
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    internal var reminderSettingsVersion by mutableIntStateOf(0)
+        private set
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -46,7 +48,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        reminderSettingsVersion++
         Tasks.read(this).forEach { Reminders.schedule(this, it) }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 7) {
+            reminderSettingsVersion++
+            Tasks.read(this).forEach { Reminders.schedule(this, it) }
+        }
     }
 
     fun notificationSettings() {
@@ -133,9 +144,18 @@ private fun Screen(activity: MainActivity) {
                             message = "设置已保存"
                         }
                     }
+                    val reminderState = remember(activity.reminderSettingsVersion, settings) {
+                        Reminders.status(activity)
+                    }
+                    Label(reminderState, 13)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Action("通知权限") { activity.notificationSettings() }
                         Action("精确提醒权限") { activity.exactSettings() }
+                    }
+                    Action("发送测试通知") {
+                        val sent = Reminders.show(activity, Task(title = "交汇提醒测试", strong = true, id = "test"), "due")
+                        message = if (sent) "已向 Android 提交测试通知，请查看通知栏"
+                            else "测试通知未提交，请开启通知权限和强提醒渠道"
                     }
                 }
             }
