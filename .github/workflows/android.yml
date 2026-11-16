@@ -10,9 +10,9 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
-      - run: sdkmanager --install "platforms;android-37"
-      - uses: gradle/actions/setup-gradle@v4
+          java-version: '25'
+      - run: sdkmanager --install "platforms;android-37.0" "build-tools;37.0.0"
+      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54
       - run: bash gradlew testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v4
         with:
