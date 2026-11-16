@@ -46,20 +46,24 @@ object Llm {
                 connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
                 check(status in 200..299) { "模型接口响应 HTTP $status" }
-                val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-                val content = envelope.getJSONArray("choices").getJSONObject(0)
-                    .getJSONObject("message").getString("content")
-                val tasks = JSONObject(content).getJSONArray("tasks")
-                List(tasks.length().coerceAtMost(100)) { index ->
-                    val item = tasks.getJSONObject(index)
-                    val due = if (item.isNull("due")) null else OffsetDateTime.parse(item.getString("due"))
-                        .toInstant().toEpochMilli()
-                    item.put("due", due ?: JSONObject.NULL).remove("id")
-                    item.remove("done")
-                    item.task().copy(title = Parser.canonicalTitle(item.getString("title")))
-                }.filter { it.title.isNotEmpty() }.distinctBy(Task::key)
+                decode(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             } finally {
                 connection.disconnect()
             }
         }
+
+    internal fun decode(response: String): List<Task> {
+        val envelope = JSONObject(response)
+        val content = envelope.getJSONArray("choices").getJSONObject(0)
+            .getJSONObject("message").getString("content")
+        val tasks = JSONObject(content).getJSONArray("tasks")
+        return List(tasks.length().coerceAtMost(100)) { index ->
+            val item = tasks.getJSONObject(index)
+            val due = if (item.isNull("due")) null else OffsetDateTime.parse(item.getString("due"))
+                .toInstant().toEpochMilli()
+            item.put("due", due ?: JSONObject.NULL).remove("id")
+            item.remove("done")
+            item.task().copy(title = Parser.canonicalTitle(item.getString("title")))
+        }.filter { it.title.isNotEmpty() }.distinctBy(Task::key)
+    }
 }
