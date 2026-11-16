@@ -56,13 +56,25 @@ object Reminders {
         val due = task.due ?: return
         if (task.done || !task.notify) return
         val now = System.currentTimeMillis()
-        for ((phase, at) in listOf("due" to due, "early" to due - task.lead * 60_000L)) {
-            if (at <= now || (phase == "early" && task.lead == 0)) continue
+        if (due <= now) return
+        val early = due - task.lead * 60_000L
+        for ((phase, at) in listOf("due" to due, "early" to early)) {
+            if (phase == "early") {
+                if (task.lead == 0 || deliveredEarly(context, task)) continue
+                if (at <= now) {
+                    if (task.live) show(context, task, phase)
+                    continue
+                }
+            }
             val intent = pending(context, task.id, phase)
             val manager = alarm(context)
             if (manager.canScheduleExactAlarms()) {
                 try {
-                    manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, intent)
+                    if (task.strong && phase == "due") {
+                        manager.setAlarmClock(AlarmManager.AlarmClockInfo(at, openApp(context)), intent)
+                    } else {
+                        manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, intent)
+                    }
                     continue
                 } catch (_: SecurityException) {
                     // The permission may have been revoked since the preceding check.
@@ -72,7 +84,18 @@ object Reminders {
         }
     }
 
+    private fun openApp(context: Context) = PendingIntent.getActivity(
+        context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun delivery(context: Context) =
+        context.getSharedPreferences("reminder_delivery", Context.MODE_PRIVATE)
+
+    private fun deliveredEarly(context: Context, task: Task) =
+        delivery(context).getLong(task.id, Long.MIN_VALUE) == task.due
+
     fun cancel(context: Context, task: Task) {
+        delivery(context).edit().remove(task.id).apply()
         for (phase in listOf("due", "early")) {
             alarm(context).cancel(pending(context, task.id, phase))
             context.getSystemService(NotificationManager::class.java).cancel(task.id + phase, 0)
@@ -88,23 +111,31 @@ object Reminders {
             channel, when (channel) { "strong" -> "强提醒"; "vibration" -> "震动提醒"; else -> "待办提醒" },
             if (task.strong) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT
         ).apply { enableVibration(task.vibration || task.strong) })
-        val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE)
-        if (phase == "due") manager.cancel(task.id + "early", 0)
+        if (phase == "early" && deliveredEarly(context, task)) return
+        if (phase == "due") {
+            manager.cancel(task.id + "early", 0)
+            delivery(context).edit().remove(task.id).apply()
+        }
         val notification = Notification.Builder(context, channel)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(task.title)
             .setContentText(listOf(if (phase == "early") "即将到期" else "现在到期", task.place, task.note)
                 .filter(String::isNotBlank).joinToString(" · "))
-            .setContentIntent(open)
-            .setCategory(Notification.CATEGORY_REMINDER)
+            .setContentIntent(openApp(context))
+            .setCategory(if (task.strong && phase == "due") Notification.CATEGORY_ALARM else Notification.CATEGORY_REMINDER)
             .setAutoCancel(true)
         if (task.live && phase == "early") {
             if (Build.VERSION.SDK_INT >= 36) notification.setRequestPromotedOngoing(true)
+            notification.setAutoCancel(false)
             notification.setWhen(task.due ?: System.currentTimeMillis())
                 .setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true).setOngoing(true)
         }
         manager.notify(task.id + phase, 0, notification.build())
+        if (phase == "early" && task.due != null &&
+            manager.areNotificationsEnabled() &&
+            manager.getNotificationChannel(channel).importance != NotificationManager.IMPORTANCE_NONE) {
+            delivery(context).edit().putLong(task.id, task.due).apply()
+        }
     }
 }
 
