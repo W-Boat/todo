@@ -56,7 +56,7 @@ object Llm {
                         .toInstant().toEpochMilli()
                     item.put("due", due ?: JSONObject.NULL).remove("id")
                     item.remove("done")
-                    item.task().copy(title = item.getString("title").trim())
+                    item.task().copy(title = Parser.canonicalTitle(item.getString("title")))
                 }.filter { it.title.isNotEmpty() }.distinctBy(Task::key)
             } finally {
                 connection.disconnect()

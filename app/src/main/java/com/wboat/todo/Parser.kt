@@ -18,7 +18,7 @@ data class Task(
     val done: Boolean = false,
     val id: String = UUID.randomUUID().toString()
 ) {
-    fun key() = listOf(title, due?.toString().orEmpty(), place).map {
+    fun key() = listOf(Parser.canonicalTitle(title), due?.toString().orEmpty(), place).map {
         it.lowercase(Locale.ROOT).replace(Regex("[\\s\\p{Punct}，。]+"), "")
     }
 }
@@ -41,6 +41,8 @@ object Parser {
         "开会" to "参加会议,会议",
         "买菜" to "购买蔬菜,采购食材"
     ).flatMap { (canonical, words) -> words.split(",").map { it to canonical } }.toMap()
+
+    internal fun canonicalTitle(value: String): String = value.trim().let { alias[it] ?: it }
 
     fun parse(input: String, now: ZonedDateTime = ZonedDateTime.now()): List<Task> {
         val chunks = mutableListOf<String>()
@@ -98,7 +100,7 @@ object Parser {
             }.getOrNull()
             else -> inherited
         }
-        val canonical = alias[title] ?: title
+        val canonical = canonicalTitle(title)
         val action = Regex("^(?:$VERBS)").find(canonical)?.value.orEmpty()
         return Task(canonical, due, location, action, extra, lead, strong, vibration, live, notify)
     }
