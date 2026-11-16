@@ -85,6 +85,7 @@ private fun Screen(activity: MainActivity) {
     val prefs = remember { activity.getSharedPreferences("model", Context.MODE_PRIVATE) }
     var tasks by remember { mutableStateOf(Tasks.read(activity)) }
     var draft by remember { mutableStateOf<List<Task>>(emptyList()) }
+    var draftEditing by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var view by remember { mutableIntStateOf(0) }
@@ -141,7 +142,7 @@ private fun Screen(activity: MainActivity) {
             item {
                 Panel {
                     Label("记下待办", 21, true)
-                    Field(input, { input = it; draft = emptyList() },
+                    Field(input, { input = it; draft = emptyList(); draftEditing = null },
                         "明天下午三点在会议室开会，提前十分钟提醒，然后去驿站取快递")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Action(if (busy) "识别中…" else "识别待办", filled = true, enabled = input.isNotBlank() && !busy) {
@@ -152,6 +153,7 @@ private fun Screen(activity: MainActivity) {
                             val token = key
                             busy = true
                             draft = emptyList()
+                            draftEditing = null
                             message = ""
                             scope.launch {
                                 try {
@@ -170,7 +172,7 @@ private fun Screen(activity: MainActivity) {
                                 }
                             }
                         }
-                        if (draft.isNotEmpty()) Action("保存待办") {
+                        if (draft.isNotEmpty()) Action("保存待办", enabled = draftEditing == null) {
                             val existing = tasks.filterNot(Task::done).map(Task::key).toSet()
                             val fresh = draft.filter { it.title.isNotBlank() && it.key() !in existing }.distinctBy(Task::key)
                             save(tasks + fresh)
@@ -181,17 +183,28 @@ private fun Screen(activity: MainActivity) {
                             }
                             input = ""
                             draft = emptyList()
+                            draftEditing = null
                         }
                     }
                     if (message.isNotBlank()) Label(message, 13)
                 }
             }
             items(draft, key = { "draft-" + it.id }) { task ->
+                val editing = draftEditing == task.id
                 Panel {
-                    Field(task.title, { title -> draft = draft.map { if (it.id == task.id) it.copy(title = title) else it } },
-                        "待办标题", single = true)
-                    Details(task)
-                    Action("移除") { draft = draft.filterNot { it.id == task.id } }
+                    if (editing) {
+                        TaskEditor(task, onCancel = { draftEditing = null }) { updated ->
+                            draft = draft.map { if (it.id == task.id) updated else it }
+                            draftEditing = null
+                        }
+                    } else {
+                        Label(task.title, 17, true)
+                        Details(task)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Action("编辑", enabled = draftEditing == null) { draftEditing = task.id }
+                            Action("移除", enabled = draftEditing == null) { draft = draft.filterNot { it.id == task.id } }
+                        }
+                    }
                 }
             }
             item {
@@ -211,6 +224,7 @@ private fun Screen(activity: MainActivity) {
             if (visible.isEmpty()) item { Panel { Label(if (view == 1) "当天没有待办" else "还没有待办", 15) } }
             items(visible, key = Task::id) { task ->
                 var expanded by remember { mutableStateOf(false) }
+                var editing by remember { mutableStateOf(false) }
                 if (view == 3) Label(task.day()?.toString() ?: "未安排", 13, true)
                 Panel {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -223,8 +237,14 @@ private fun Screen(activity: MainActivity) {
                         }
                     }
                     if (view == 2 && task.note.isNotBlank() && !expanded) Label(task.note, 15)
-                    if (expanded) {
+                    if (editing) {
+                        TaskEditor(task, onCancel = { editing = false }) { updated ->
+                            save(tasks.map { if (it.id == task.id) updated else it })
+                            editing = false
+                        }
+                    } else if (expanded) {
                         Details(task, includeSummary = false)
+                        Action("编辑") { editing = true }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (task.due != null) Action("添加到系统日历") {
                                 runCatching { activity.calendar(task) }.onFailure { message = "设备上没有可用的日历应用" }
@@ -266,6 +286,56 @@ private fun MonthGrid(month: YearMonth, day: LocalDate, marked: Set<LocalDate>, 
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TaskEditor(task: Task, onCancel: () -> Unit, onSave: (Task) -> Unit) {
+    var edited by remember(task) { mutableStateOf(task) }
+    val zone = ZoneId.systemDefault()
+    val dateFormat = remember { DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm").withResolverStyle(java.time.format.ResolverStyle.STRICT) }
+    var date by remember(task) { mutableStateOf(task.due?.let { dateFormat.format(Instant.ofEpochMilli(it).atZone(zone)) }.orEmpty()) }
+    var lead by remember(task) { mutableStateOf(task.lead.toString()) }
+    val dateValue = if (date.isBlank()) null else runCatching { LocalDateTime.parse(date.trim(), dateFormat) }.getOrNull()
+    val due = dateValue?.let { value ->
+        zone.rules.getValidOffsets(value).firstOrNull()?.let { value.toInstant(it).toEpochMilli() }
+    }
+    val minutes = lead.toIntOrNull()?.takeIf { it in 0..43200 }
+    Field(edited.title, { edited = edited.copy(title = it) }, "主题", single = true)
+    Label("时间 · 年-月-日 时:分", 13)
+    Field(date, { date = it }, "未安排", single = true)
+    if (date.isNotBlank() && due == null) Label("请输入有效时间，例如 2026-12-01 09:30", 13)
+    Field(edited.place, { edited = edited.copy(place = it) }, "地点", single = true)
+    Field(edited.intent, { edited = edited.copy(intent = it) }, "意图", single = true)
+    Field(edited.note, { edited = edited.copy(note = it) }, "备注")
+    if (due != null) {
+        ReminderOption("通知提醒", edited.notify) { edited = edited.copy(notify = !edited.notify) }
+        if (edited.notify) {
+            ReminderOption("强提醒", edited.strong) { edited = edited.copy(strong = !edited.strong) }
+            ReminderOption("震动提醒", edited.vibration) { edited = edited.copy(vibration = !edited.vibration) }
+            ReminderOption("实时倒计时", edited.live) { edited = edited.copy(live = !edited.live) }
+            Label("提前分钟数", 13)
+            Field(lead, { lead = it }, "0", single = true)
+            if (minutes == null) Label("请输入 0 到 43200 之间的整数", 13)
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Action("取消", onClick = onCancel)
+        Action("应用修改", filled = true,
+            enabled = edited.title.isNotBlank() && (date.isBlank() || due != null) && (due == null || !edited.notify || minutes != null)) {
+            val advance = minutes ?: edited.lead
+            val updatedDue = if (dateValue != null && task.due?.let { dateFormat.format(Instant.ofEpochMilli(it).atZone(zone)) } == date.trim()) task.due else due
+            onSave(edited.copy(title = edited.title.trim(), due = updatedDue, lead = if (edited.live && advance == 0) 15 else advance))
+        }
+    }
+}
+
+@Composable
+private fun ReminderOption(text: String, enabled: Boolean, change: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = change).padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = enabled)
+        Label(text, 15)
     }
 }
 
